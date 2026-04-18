@@ -5,6 +5,7 @@ from datetime import date
 from prophet import Prophet
 from prophet.plot import plot_plotly
 from plotly import graph_objs as go
+import io
 
 # --- CONFIGURATION ---
 START_DATE = "2015-01-01"
@@ -44,8 +45,8 @@ data = load_data(TICKER)
 data_load_state.text('Loading real-time Nifty 50 data... Done!')
 
 # --- RAW DATA VIEW ---
-st.subheader("Raw Historical Data")
-st.write(data.tail())
+with st.expander("Show Raw Historical Data"):
+    st.write(data.tail())
 
 # --- PLOT HISTORICAL DATA ---
 def plot_raw_data():
@@ -56,8 +57,10 @@ def plot_raw_data():
 
 plot_raw_data()
 
+st.divider()
+
 # --- FORECASTING MODEL ---
-st.subheader("🔮 Forecast Future Prices")
+st.header("🔮 Forecast Future Prices")
 
 # Choose the frequency of the prediction
 period_type = st.radio(
@@ -83,33 +86,94 @@ else:
 # Prepare data for Prophet
 df_train = data[['Date', 'Close']]
 df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
-
-# Drop any rows that have missing values (NaNs)
 df_train = df_train.dropna()
 
-# Safety Check: If Yahoo Finance returned empty data, stop the app gracefully
 if len(df_train) < 2:
     st.error("🚨 **Data Error:** Not enough data was fetched from Yahoo Finance to make a prediction. This usually happens if Yahoo Finance is temporarily blocking cloud servers. Please try again in a few minutes.")
-    st.stop() # This halts the script here so it doesn't crash the app
+    st.stop() 
 
 # Initialize and fit the model
-m = Prophet(daily_seasonality=False)
-m.fit(df_train)
+with st.spinner("Training predictive model..."):
+    m = Prophet(daily_seasonality=False)
+    m.fit(df_train)
+    future = m.make_future_dataframe(periods=period)
+    forecast = m.predict(future)
 
-# Create future dataframe and predict
-future = m.make_future_dataframe(periods=period)
-forecast = m.predict(future)
+# --- DISPLAY FORECAST CHARTS ---
+st.subheader(f"Forecast Plots ({display_period})")
 
-# --- DISPLAY FORECAST ---
-st.subheader(f"Forecast Data ({display_period})")
-st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
-
-st.write("### Forecast Plot")
 fig1 = plot_plotly(m, forecast)
 fig1.layout.update(title_text=f'Nifty 50 Price Forecast for the next {display_period}', xaxis_rangeslider_visible=True)
 st.plotly_chart(fig1, use_container_width=True)
 
-st.write("### Forecast Components")
-st.write("This shows the underlying trends and yearly/weekly seasonality found by the model.")
-fig2 = m.plot_components(forecast)
-st.write(fig2)
+with st.expander("Show Forecast Components (Trends & Seasonality)"):
+    st.write("This shows the underlying trends and yearly/weekly seasonality found by the model.")
+    fig2 = m.plot_components(forecast)
+    st.write(fig2)
+
+st.divider()
+
+# --- TEXT EXPLANATION & INSIGHTS ---
+st.header("📝 Forecast Summary & Insights")
+
+# Extracting key data points for the text explanation
+last_actual_date = df_train['ds'].iloc[-1].strftime("%Y-%m-%d")
+last_actual_price = df_train['y'].iloc[-1]
+
+final_pred_date = forecast['ds'].iloc[-1].strftime("%Y-%m-%d")
+final_pred_price = forecast['yhat'].iloc[-1]
+final_pred_lower = forecast['yhat_lower'].iloc[-1]
+final_pred_upper = forecast['yhat_upper'].iloc[-1]
+
+# Calculate expected percentage change
+price_diff = final_pred_price - last_actual_price
+percent_change = (price_diff / last_actual_price) * 100
+trend = "bullish 📈 (upward)" if price_diff > 0 else "bearish 📉 (downward)"
+
+# Generate plain-english text
+summary_text = f"""
+Based on the historical data ending on **{last_actual_date}**, the Nifty 50 closed at roughly **{last_actual_price:,.2f}**. 
+
+The AI model projects a **{trend}** trend over the next {display_period}. 
+By **{final_pred_date}**, the model predicts the Nifty 50 could reach around **{final_pred_price:,.2f}**, which represents an estimated change of **{percent_change:.2f}%** from the last actual closing price.
+
+**Expected Price Range by {final_pred_date}:**
+* **Pessimistic Estimate (Lower Bound):** {final_pred_lower:,.2f}
+* **Optimistic Estimate (Upper Bound):** {final_pred_upper:,.2f}
+
+*Keep in mind that as you predict further into the future, the gap between the upper and lower bounds widens because uncertainty increases.*
+"""
+
+st.info(summary_text)
+
+# --- DOWNLOAD OPTIONS ---
+st.subheader("📥 Download Reports")
+st.write("Export the predicted data or the text summary for offline viewing.")
+
+col1, col2 = st.columns(2)
+
+# 1. Download CSV Data
+csv_data = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(columns={
+    'ds': 'Date', 
+    'yhat': 'Predicted_Price', 
+    'yhat_lower': 'Lower_Bound', 
+    'yhat_upper': 'Upper_Bound'
+})
+csv_file = csv_data.to_csv(index=False).encode('utf-8')
+
+with col1:
+    st.download_button(
+        label="📄 Download Forecast Data (CSV)",
+        data=csv_file,
+        file_name=f"nifty50_forecast_{display_period.replace(' ', '_').lower()}.csv",
+        mime="text/csv",
+    )
+
+# 2. Download Text Summary
+with col2:
+    st.download_button(
+        label="📝 Download Text Summary (TXT)",
+        data=summary_text,
+        file_name=f"nifty50_summary_{display_period.replace(' ', '_').lower()}.txt",
+        mime="text/plain",
+    )
