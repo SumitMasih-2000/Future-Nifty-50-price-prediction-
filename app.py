@@ -28,8 +28,15 @@ st.markdown("""
 # --- DATA FETCHING ---
 @st.cache_data
 def load_data(ticker):
-    data = yf.download(ticker, start=START_DATE, end=TODAY)
+    # Using Ticker().history() is often more stable than yf.download()
+    stock = yf.Ticker(ticker)
+    data = stock.history(start=START_DATE, end=TODAY)
     data.reset_index(inplace=True)
+    
+    # Prophet requires timezone-naive dates. This removes the timezone info.
+    if 'Date' in data.columns:
+        data['Date'] = pd.to_datetime(data['Date']).dt.tz_localize(None)
+        
     return data
 
 data_load_state = st.text('Loading real-time Nifty 50 data...')
@@ -59,6 +66,14 @@ period = n_years * 365
 # Prepare data for Prophet
 df_train = data[['Date', 'Close']]
 df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
+
+# Drop any rows that have missing values (NaNs)
+df_train = df_train.dropna()
+
+# Safety Check: If Yahoo Finance returned empty data, stop the app gracefully
+if len(df_train) < 2:
+    st.error("🚨 **Data Error:** Not enough data was fetched from Yahoo Finance to make a prediction. This usually happens if Yahoo Finance is temporarily blocking cloud servers. Please try again in a few minutes.")
+    st.stop() # This halts the script here so it doesn't crash the app
 
 # Initialize and fit the model
 m = Prophet(daily_seasonality=False)
