@@ -59,9 +59,26 @@ plot_raw_data()
 # --- FORECASTING MODEL ---
 st.subheader("🔮 Forecast Future Prices")
 
-# Slider to choose how many years into the future to predict
-n_years = st.slider('Select years of prediction:', 1, 5)
-period = n_years * 365
+# Choose the frequency of the prediction
+period_type = st.radio(
+    "Select Prediction Period Type:", 
+    ('Days', 'Weeks', 'Years'), 
+    horizontal=True
+)
+
+# Dynamically render the slider and calculate total days (period) based on selection
+if period_type == 'Days':
+    n_days = st.slider('Select number of days to predict:', 1, 90, 30) # Default 30 days, max 90
+    period = n_days
+    display_period = f"{n_days} Days"
+elif period_type == 'Weeks':
+    n_weeks = st.slider('Select number of weeks to predict:', 1, 52, 4) # Default 4 weeks, max 52
+    period = n_weeks * 7
+    display_period = f"{n_weeks} Weeks"
+else:
+    n_years = st.slider('Select number of years to predict:', 1, 5, 1) # Default 1 year, max 5
+    period = n_years * 365
+    display_period = f"{n_years} Years"
 
 # Prepare data for Prophet
 df_train = data[['Date', 'Close']]
@@ -84,12 +101,12 @@ future = m.make_future_dataframe(periods=period)
 forecast = m.predict(future)
 
 # --- DISPLAY FORECAST ---
-st.subheader(f"Forecast Data ({n_years} Years)")
+st.subheader(f"Forecast Data ({display_period})")
 st.write(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail())
 
 st.write("### Forecast Plot")
 fig1 = plot_plotly(m, forecast)
-fig1.layout.update(title_text='Nifty 50 Price Forecast', xaxis_rangeslider_visible=True)
+fig1.layout.update(title_text=f'Nifty 50 Price Forecast for the next {display_period}', xaxis_rangeslider_visible=True)
 st.plotly_chart(fig1, use_container_width=True)
 
 st.write("### Forecast Components")
