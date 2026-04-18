@@ -15,9 +15,14 @@ st.set_page_config(page_title="Nifty 50 Predictor", layout="wide")
 
 # --- UI HEADER ---
 st.title("📈 Nifty 50 Future Price Predictor")
+
+# --- IMPORTANT ALERTS & DISCLAIMERS ---
+st.warning("""
+**🚨 IMPORTANT ALERT:** The stock market is highly sensitive to real-world events. The predictions shown here **do not** and **cannot** account for sudden breaking news, global events, economic shifts, or new rules and policies implemented by the government. Such events can drastically and immediately affect stock prices.
+""")
+
 st.markdown("""
-*Disclaimer: This app uses historical data and time-series forecasting (Prophet) to project future trends. 
-The stock market is highly volatile, and these predictions should **not** be used for financial trading.*
+*Disclaimer: This app uses historical data and time-series forecasting (Prophet) to project past trends into the future. These predictions should **not** be used for financial trading or investment decisions.*
 """)
 
 # --- DATA FETCHING ---
@@ -51,7 +56,7 @@ st.subheader("🔮 Forecast Future Prices")
 n_years = st.slider('Select years of prediction:', 1, 5)
 period = n_years * 365
 
-# Prepare data for Prophet (Prophet requires specific column names: 'ds' for dates, 'y' for values)
+# Prepare data for Prophet
 df_train = data[['Date', 'Close']]
 df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
 
