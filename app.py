@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import date
+from datetime import date, timedelta
 from prophet import Prophet
 from prophet.plot import plot_plotly
 from plotly import graph_objs as go
@@ -87,9 +87,32 @@ if not main_data.empty and not compare_data.empty:
 st.divider()
 
 # ==========================================
-# SECTION 2: PROPHET TIME-SERIES FORECAST WITH PAST VS FUTURE
+# SECTION 2: PROPHET TIME-SERIES FORECAST WITH BACKTESTING
 # ==========================================
-st.header("🔮 AI Trend Forecast (Prophet)")
+st.header("🔮 AI Trend Forecast & Accuracy Check")
+st.write("Train the model on either current data or a past date to check how accurate its previous predictions turned out to be.")
+
+# Mode selection: Live prediction vs Backtesting
+analysis_mode = st.radio("Choose Analysis Mode:", ("Live Mode (Predict from Today into Future)", "Backtest Mode (See how past AI models performed vs Reality)"), horizontal=True)
+
+df_all = main_data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"}).dropna()
+
+if analysis_mode == "Live Mode (Predict from Today into Future)":
+    cutoff_date = df_all['ds'].max()
+    st.success(f"Running Live Mode: Model is training on all available data up to Today ({cutoff_date.strftime('%Y-%m-%d')}).")
+else:
+    # Allow user to pick a past point in time (e.g., 3 or 6 months ago) to pretend "Today" was back then
+    min_cutoff = df_all['ds'].min() + timedelta(days=365) # at least 1 year of training data needed
+    max_cutoff = df_all['ds'].max() - timedelta(days=30)  # at least 30 days of actual results to compare against
+    
+    cutoff_date_input = st.date_input(
+        "Pretend 'Today' was this date in the past:", 
+        value=(df_all['ds'].max() - timedelta(days=90)).to_pydatetime(),
+        min_value=min_cutoff.to_pydatetime(),
+        max_value=max_cutoff.to_pydatetime()
+    )
+    cutoff_date = pd.to_datetime(cutoff_date_input)
+    st.info(f"Running Backtest Mode: The AI will hide all data after **{cutoff_date.strftime('%Y-%m-%d')}**, make a blind prediction, and compare it with what actually happened.")
 
 period_type = st.radio("Select Forecast Period Type:", ('Days', 'Weeks', 'Years'), horizontal=True)
 
@@ -106,7 +129,10 @@ else:
     period = n_years * 365
     display_period = f"{n_years} Years"
 
-df_train = main_data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"}).dropna()
+# Filter training data to simulate the past cutoff date
+df_train = df_all[df_all['ds'] <= cutoff_date]
+# Realized data that actually happened after the cutoff date
+df_realized_future = df_all[(df_all['ds'] > cutoff_date) & (df_all['ds'] <= cutoff_date + timedelta(days=period))]
 
 with st.spinner("Training predictive AI model..."):
     m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
@@ -114,29 +140,33 @@ with st.spinner("Training predictive AI model..."):
     future = m.make_future_dataframe(periods=period)
     forecast = m.predict(future)
 
-# Customizing the Prophet chart for instant readability (Past vs Future split)
+# Customizing the Prophet chart for instant readability
 fig_forecast = go.Figure()
 
-# Past Historical Data
-fig_forecast.add_trace(go.Scatter(x=df_train['ds'], y=df_train['y'], mode='markers', name='Past Actual Price', marker=dict(color='black', size=3)))
+# Past Historical Training Data (up to cutoff)
+fig_forecast.add_trace(go.Scatter(x=df_train['ds'], y=df_train['y'], mode='markers', name='Data Known by AI', marker=dict(color='black', size=3)))
 
-# Future Prediction Data Split
-past_pred = forecast[forecast['ds'] <= df_train['ds'].max()]
-future_pred = forecast[forecast['ds'] > df_train['ds'].max()]
+# Split prediction data 
+past_pred = forecast[forecast['ds'] <= cutoff_date]
+future_pred = forecast[forecast['ds'] > cutoff_date]
 
 # Uncertainty intervals
 fig_forecast.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False))
 fig_forecast.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 123, 255, 0.15)', name='Confidence Interval Range'))
 
 # Predicted Trend Lines
-fig_forecast.add_trace(go.Scatter(x=past_pred['ds'], y=past_pred['yhat'], mode='lines', line=dict(color='blue', width=1.5), name='AI Past Model Fit'))
-fig_forecast.add_trace(go.Scatter(x=future_pred['ds'], y=future_pred['yhat'], mode='lines', line=dict(color='red', width=3), name='AI Future Prediction'))
+fig_forecast.add_trace(go.Scatter(x=past_pred['ds'], y=past_pred['yhat'], mode='lines', line=dict(color='blue', width=1.5), name='AI Historical Fit'))
+fig_forecast.add_trace(go.Scatter(x=future_pred['ds'], y=future_pred['yhat'], mode='lines', line=dict(color='red', width=3), name='AI Future Prediction Line'))
 
-# Vertical separator line for Past vs Future
-fig_forecast.add_vline(x=df_train['ds'].max(), line_width=2, line_dash="dash", line_color="green", annotation_text="Today (Prediction Starts Here)")
+# IF BACKTEST MODE: Overlay the REAL numbers that happened after the cutoff date so we can grade the AI
+if analysis_mode != "Live Mode (Predict from Today into Future)" and not df_realized_future.empty:
+    fig_forecast.add_trace(go.Scatter(x=df_realized_future['ds'], y=df_realized_future['y'], mode='lines+markers', line=dict(color='#ef553b', width=2, dash='dot'), marker=dict(size=4), name='What Actually Happened (Real Results)'))
+
+# Vertical separator line for Cutoff Date
+fig_forecast.add_vline(x=cutoff_date, line_width=2, line_dash="dash", line_color="green", annotation_text="Simulation Start Line")
 
 fig_forecast.layout.update(
-    title_text=f'Nifty 50 Price Forecast: Past Performance vs Next {display_period}',
+    title_text=f"Nifty 50 Price Performance vs AI Predictions (Base Date: {cutoff_date.strftime('%Y-%m-%d')})",
     xaxis_title="Date",
     yaxis_title="Price (INR)",
     xaxis_rangeslider_visible=False,
@@ -144,21 +174,28 @@ fig_forecast.layout.update(
 )
 st.plotly_chart(fig_forecast, use_container_width=True)
 
-# Performance summary metrics
+# Performance calculation metrics
 last_actual = df_train['y'].iloc[-1]
 predicted_future = future_pred['yhat'].iloc[-1] if not future_pred.empty else last_actual
-pct_change_forecast = ((predicted_future - last_actual) / last_actual) * 100
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Last Historic Price", f"₹{last_actual:,.2f}")
-col2.metric(f"Predicted Price ({display_period})", f"₹{predicted_future:,.2f}")
-col3.metric("Expected AI Trend Move", f"{pct_change_forecast:+.2f}%", delta_color="inverse" if pct_change_forecast < 0 else "normal")
+col1.metric("Price at Simulation Start", f"₹{last_actual:,.2f}")
+col2.metric("AI Predicted Target Price", f"₹{predicted_future:,.2f}")
+
+if analysis_mode != "Live Mode (Predict from Today into Future)" and not df_realized_future.empty:
+    actual_end_price = df_realized_future['y'].iloc[-1]
+    error_pct = ((predicted_future - actual_end_price) / actual_end_price) * 100
+    col3.metric("Real Final Price (Difference)", f"₹{actual_end_price:,.2f}", f"AI Error: {error_pct:+.2f}%", delta_color="inverse")
+else:
+    pct_change_forecast = ((predicted_future - last_actual) / last_actual) * 100
+    col3.metric("Expected AI Trend Move", f"{pct_change_forecast:+.2f}%")
 
 st.info("""
-**📊 How to interpret this chart:**
-* **Left of the Green Dashed Line:** Shows the **Past** actual data points (black) vs how well the AI matched history (blue line).
-* **Right of the Green Dashed Line:** Shows the purely mathematical **Future** path (red line). 
-* The **Shaded Blue Area** expands forward in time because uncertainty inherently grows the further into the future you try to look.
+**📊 How to use Backtest Mode:**
+1. Switch the mode to **Backtest Mode**.
+2. Select a date from a few months ago using the date selector tool. 
+3. Look at the right side of the **Green Dashed Line**. The **Red Line** shows what the AI guessed would happen, while the **Orange Dotted Line** shows what *actually* happened in the real stock market.
+4. Check the third metric card to see the precise calculation error percentage!
 """)
 
 st.divider()
@@ -173,19 +210,19 @@ Instead of a single line forecast, financial institutions use a **Binomial Tree 
 
 tree_steps = st.slider("Select depth of simulation steps (Nodes):", 2, 15, 6)
 
-# Calculate Volatility from historical data
-main_data['Daily_Return'] = main_data['Close'].pct_change()
-daily_volatility = main_data['Daily_Return'].std()
+# Calculate Volatility from historical data (using data up to the chosen cutoff date for consistency)
+main_data_filtered = main_data[main_data['Date'] <= cutoff_date].copy()
+main_data_filtered['Daily_Return'] = main_data_filtered['Close'].pct_change()
+daily_volatility = main_data_filtered['Daily_Return'].std()
 annual_volatility = daily_volatility * math.sqrt(252)
 
-last_price = main_data['Close'].iloc[-1]
-T = 0.5 # 6-month normalized horizon
+tree_last_price = main_data_filtered['Close'].iloc[-1]
+T = 0.5 
 dt = T / tree_steps
 
 u = math.exp(annual_volatility * math.sqrt(dt))
 d = 1 / u
 
-# Generate Node Coordinates efficiently without heavy looping artifacts
 edge_x = []
 edge_y = []
 node_x = []
@@ -194,34 +231,26 @@ node_text = []
 
 for i in range(tree_steps + 1):
     for j in range(i + 1):
-        # Calculate asset price at node (i, j)
-        p = last_price * (u ** (i - j)) * (d ** j)
+        p = tree_last_price * (u ** (i - j)) * (d ** j)
         node_x.append(i)
         node_y.append(p)
         node_text.append(f"Step {i}, Node {j}<br>Simulated Price: ₹{p:,.2f}")
         
-        # Connect to next branches safely
         if i < tree_steps:
             edge_x.extend([i, i + 1, None])
             edge_y.extend([p, p * u, None])
             edge_x.extend([i, i + 1, None])
             edge_y.extend([p, p * d, None])
 
-# Build clean vector-based tree diagram
 fig_tree = go.Figure()
-
-# Add Branches/Paths
 fig_tree.add_trace(go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(color='rgba(150,150,150,0.4)', width=1.5), hoverinfo='none', showlegend=False))
-
-# Add Interactive Intersect Nodes
 fig_tree.add_trace(go.Scatter(x=node_x, y=node_y, mode='markers', marker=dict(size=9, color='#2ca02c', line=dict(color='white', width=1)), text=node_text, hoverinfo='text', name='Price Nodes'))
 
-# Highlight Outer Extremes (Best / Worst / Average paths)
-best_case = last_price * (u ** tree_steps)
-worst_case = last_price * (d ** tree_steps)
+best_case = tree_last_price * (u ** tree_steps)
+worst_case = tree_last_price * (d ** tree_steps)
 
 fig_tree.layout.update(
-    title_text=f"Streamlined Price Matrix Grid (Starting from ₹{last_price:,.2f})",
+    title_text=f"Streamlined Price Matrix Grid (Starting from ₹{tree_last_price:,.2f})",
     xaxis_title="Simulation Steps Forward",
     yaxis_title="Simulated Price Alternatives (INR)",
     template="plotly_white",
@@ -230,11 +259,10 @@ fig_tree.layout.update(
 
 st.plotly_chart(fig_tree, use_container_width=True)
 
-# Math Summary Cards for the Tree
 c1, c2, c3 = st.columns(3)
-c1.metric("Extreme Bull Case (Top Node)", f"₹{best_case:,.2f}", f"+{((best_case-last_price)/last_price)*100:.1f}%")
+c1.metric("Extreme Bull Case (Top Node)", f"₹{best_case:,.2f}", f"+{((best_case-tree_last_price)/tree_last_price)*100:.1f}%")
 c2.metric("Historical Annual Volatility", f"{annual_volatility*100:.2f}%")
-c3.metric("Extreme Bear Case (Bottom Node)", f"₹{worst_case:,.2f}", f"{((worst_case-last_price)/last_price)*100:.1f}%")
+c3.metric("Extreme Bear Case (Bottom Node)", f"₹{worst_case:,.2f}", f"{((worst_case-tree_last_price)/tree_last_price)*100:.1f}%")
 
 st.info(f"""
 **📊 How to interpret this chart:**
