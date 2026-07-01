@@ -9,10 +9,9 @@ from plotly import graph_objs as go
 import math
 
 # --- CONFIGURATION ---
-START_DATE = "2020-01-01" # Shortened for faster loading and more relevant recent volatility
+START_DATE = "2020-01-01" 
 TODAY = date.today().strftime("%Y-%m-%d")
 
-# A sample of Top Nifty 50 companies for comparison
 NIFTY_50_TICKERS = {
     "Nifty 50 Index": "^NSEI",
     "Reliance Industries": "RELIANCE.NS",
@@ -60,21 +59,24 @@ compare_ticker = NIFTY_50_TICKERS[compare_stock_name]
 compare_data = load_data(compare_ticker)
 
 if not main_data.empty and not compare_data.empty:
-    # Merge data on Date to ensure apples-to-apples comparison
     merged_df = pd.merge(main_data[['Date', 'Close']], compare_data[['Date', 'Close']], on='Date', suffixes=('_Nifty', '_Stock'))
     
-    # Calculate percentage change from the first day in the dataset
     merged_df['Nifty_Pct'] = (merged_df['Close_Nifty'] / merged_df['Close_Nifty'].iloc[0] - 1) * 100
     merged_df['Stock_Pct'] = (merged_df['Close_Stock'] / merged_df['Close_Stock'].iloc[0] - 1) * 100
 
     fig_comp = go.Figure()
-    fig_comp.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Nifty_Pct'], name="Nifty 50 (%)", line=dict(color='blue')))
-    fig_comp.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Stock_Pct'], name=f"{compare_stock_name} (%)", line=dict(color='orange')))
-    fig_comp.layout.update(title_text=f'Relative Performance: Nifty 50 vs {compare_stock_name}', yaxis_title="Percentage Change (%)", xaxis_rangeslider_visible=True)
+    fig_comp.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Nifty_Pct'], name="Nifty 50 (%)", line=dict(color='#1f77b4', width=2)))
+    fig_comp.add_trace(go.Scatter(x=merged_df['Date'], y=merged_df['Stock_Pct'], name=f"{compare_stock_name} (%)", line=dict(color='#ff7f0e', width=2)))
+    
+    fig_comp.layout.update(
+        title_text=f'Relative Performance: Nifty 50 vs {compare_stock_name}', 
+        yaxis_title="Percentage Change (%)", 
+        xaxis_rangeslider_visible=False,
+        template="plotly_white"
+    )
     
     st.plotly_chart(fig_comp, use_container_width=True)
     
-    # Interpretation
     st.info(f"""
     **📊 How to interpret this chart:**
     This chart shows the percentage growth of both assets starting from zero on {START_DATE}. 
@@ -85,7 +87,7 @@ if not main_data.empty and not compare_data.empty:
 st.divider()
 
 # ==========================================
-# SECTION 2: PROPHET TIME-SERIES FORECAST
+# SECTION 2: PROPHET TIME-SERIES FORECAST WITH PAST VS FUTURE
 # ==========================================
 st.header("🔮 AI Trend Forecast (Prophet)")
 
@@ -107,91 +109,137 @@ else:
 df_train = main_data[['Date', 'Close']].rename(columns={"Date": "ds", "Close": "y"}).dropna()
 
 with st.spinner("Training predictive AI model..."):
-    m = Prophet(daily_seasonality=False)
+    m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
     m.fit(df_train)
     future = m.make_future_dataframe(periods=period)
     forecast = m.predict(future)
 
-fig_forecast = plot_plotly(m, forecast)
-fig_forecast.layout.update(title_text=f'Nifty 50 Price Forecast for the next {display_period}', xaxis_rangeslider_visible=True)
+# Customizing the Prophet chart for instant readability (Past vs Future split)
+fig_forecast = go.Figure()
+
+# Past Historical Data
+fig_forecast.add_trace(go.Scatter(x=df_train['ds'], y=df_train['y'], mode='markers', name='Past Actual Price', marker=dict(color='black', size=3)))
+
+# Future Prediction Data Split
+past_pred = forecast[forecast['ds'] <= df_train['ds'].max()]
+future_pred = forecast[forecast['ds'] > df_train['ds'].max()]
+
+# Uncertainty intervals
+fig_forecast.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False))
+fig_forecast.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 123, 255, 0.15)', name='Confidence Interval Range'))
+
+# Predicted Trend Lines
+fig_forecast.add_trace(go.Scatter(x=past_pred['ds'], y=past_pred['yhat'], mode='lines', line=dict(color='blue', width=1.5), name='AI Past Model Fit'))
+fig_forecast.add_trace(go.Scatter(x=future_pred['ds'], y=future_pred['yhat'], mode='lines', line=dict(color='red', width=3), name='AI Future Prediction'))
+
+# Vertical separator line for Past vs Future
+fig_forecast.add_vline(x=df_train['ds'].max(), line_width=2, line_dash="dash", line_color="green", annotation_text="Today (Prediction Starts Here)")
+
+fig_forecast.layout.update(
+    title_text=f'Nifty 50 Price Forecast: Past Performance vs Next {display_period}',
+    xaxis_title="Date",
+    yaxis_title="Price (INR)",
+    xaxis_rangeslider_visible=False,
+    template="plotly_white"
+)
 st.plotly_chart(fig_forecast, use_container_width=True)
 
-st.info(f"""
+# Performance summary metrics
+last_actual = df_train['y'].iloc[-1]
+predicted_future = future_pred['yhat'].iloc[-1] if not future_pred.empty else last_actual
+pct_change_forecast = ((predicted_future - last_actual) / last_actual) * 100
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Last Historic Price", f"₹{last_actual:,.2f}")
+col2.metric(f"Predicted Price ({display_period})", f"₹{predicted_future:,.2f}")
+col3.metric("Expected AI Trend Move", f"{pct_change_forecast:+.2f}%", delta_color="inverse" if pct_change_forecast < 0 else "normal")
+
+st.info("""
 **📊 How to interpret this chart:**
-* The **Black Dots** represent actual historical closing prices.
-* The **Blue Line** is the AI's predicted average trend line.
-* The **Light Blue Shaded Area** represents the "Confidence Interval." The wider this area gets, the more uncertain the AI is about the exact price. This proves that there is no single "true" future price, only a mathematically probable range.
+* **Left of the Green Dashed Line:** Shows the **Past** actual data points (black) vs how well the AI matched history (blue line).
+* **Right of the Green Dashed Line:** Shows the purely mathematical **Future** path (red line). 
+* The **Shaded Blue Area** expands forward in time because uncertainty inherently grows the further into the future you try to look.
 """)
 
 st.divider()
 
 # ==========================================
-# SECTION 3: BINOMIAL OPTIONS/PRICE TREE
+# SECTION 3: RE-ENGINEERED STREAMLINED BINOMIAL TREE
 # ==========================================
-st.header("🌳 Binomial Price Tree Simulation")
+st.header("🌳 Visual Binomial Probability Tree")
 st.write("""
-Instead of a single AI prediction, financial engineers use Binomial Trees based on **historical volatility** to map out possible future price paths step-by-step.
+Instead of a single line forecast, financial institutions use a **Binomial Tree Matrix** based on standard deviations to look at best, worst, and expected average path scenarios.
 """)
 
-tree_steps = st.slider("Select number of future steps (Nodes):", 2, 10, 5)
+tree_steps = st.slider("Select depth of simulation steps (Nodes):", 2, 15, 6)
 
 # Calculate Volatility from historical data
 main_data['Daily_Return'] = main_data['Close'].pct_change()
 daily_volatility = main_data['Daily_Return'].std()
-annual_volatility = daily_volatility * math.sqrt(252) # 252 trading days in a year
+annual_volatility = daily_volatility * math.sqrt(252)
 
 last_price = main_data['Close'].iloc[-1]
-T = 1.0 # 1 year forward looking (normalized)
+T = 0.5 # 6-month normalized horizon
 dt = T / tree_steps
 
-# Binomial factors (Cox-Ross-Rubinstein model)
 u = math.exp(annual_volatility * math.sqrt(dt))
 d = 1 / u
 
-# Generate tree nodes
-tree_fig = go.Figure()
+# Generate Node Coordinates efficiently without heavy looping artifacts
+edge_x = []
+edge_y = []
+node_x = []
+node_y = []
+node_text = []
 
-for step in range(tree_steps):
-    for node in range(step + 1):
-        # Current node price
-        current_node_price = last_price * (u ** (step - node)) * (d ** node)
+for i in range(tree_steps + 1):
+    for j in range(i + 1):
+        # Calculate asset price at node (i, j)
+        p = last_price * (u ** (i - j)) * (d ** j)
+        node_x.append(i)
+        node_y.append(p)
+        node_text.append(f"Step {i}, Node {j}<br>Simulated Price: ₹{p:,.2f}")
         
-        # Calculate next step prices (Up and Down)
-        price_up = current_node_price * u
-        price_down = current_node_price * d
-        
-        # Draw line going UP
-        tree_fig.add_trace(go.Scatter(
-            x=[step, step + 1], y=[current_node_price, price_up],
-            mode='lines+markers', line=dict(color='green', width=2),
-            marker=dict(size=8, color='black'), hoverinfo='y', showlegend=False
-        ))
-        
-        # Draw line going DOWN
-        tree_fig.add_trace(go.Scatter(
-            x=[step, step + 1], y=[current_node_price, price_down],
-            mode='lines+markers', line=dict(color='red', width=2),
-            marker=dict(size=8, color='black'), hoverinfo='y', showlegend=False
-        ))
+        # Connect to next branches safely
+        if i < tree_steps:
+            edge_x.extend([i, i + 1, None])
+            edge_y.extend([p, p * u, None])
+            edge_x.extend([i, i + 1, None])
+            edge_y.extend([p, p * d, None])
 
-tree_fig.layout.update(
-    title_text=f"Binomial Price Path Simulation ({tree_steps} Steps)",
-    xaxis_title="Simulation Steps (Forward in Time)",
-    yaxis_title="Simulated Price Level",
-    showlegend=False
+# Build clean vector-based tree diagram
+fig_tree = go.Figure()
+
+# Add Branches/Paths
+fig_tree.add_trace(go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(color='rgba(150,150,150,0.4)', width=1.5), hoverinfo='none', showlegend=False))
+
+# Add Interactive Intersect Nodes
+fig_tree.add_trace(go.Scatter(x=node_x, y=node_y, mode='markers', marker=dict(size=9, color='#2ca02c', line=dict(color='white', width=1)), text=node_text, hoverinfo='text', name='Price Nodes'))
+
+# Highlight Outer Extremes (Best / Worst / Average paths)
+best_case = last_price * (u ** tree_steps)
+worst_case = last_price * (d ** tree_steps)
+
+fig_tree.layout.update(
+    title_text=f"Streamlined Price Matrix Grid (Starting from ₹{last_price:,.2f})",
+    xaxis_title="Simulation Steps Forward",
+    yaxis_title="Simulated Price Alternatives (INR)",
+    template="plotly_white",
+    hovermode='closest'
 )
 
-st.plotly_chart(tree_fig, use_container_width=True)
+st.plotly_chart(fig_tree, use_container_width=True)
 
-# Math and Interpretation
+# Math Summary Cards for the Tree
+c1, c2, c3 = st.columns(3)
+c1.metric("Extreme Bull Case (Top Node)", f"₹{best_case:,.2f}", f"+{((best_case-last_price)/last_price)*100:.1f}%")
+c2.metric("Historical Annual Volatility", f"{annual_volatility*100:.2f}%")
+c3.metric("Extreme Bear Case (Bottom Node)", f"₹{worst_case:,.2f}", f"{((worst_case-last_price)/last_price)*100:.1f}%")
+
 st.info(f"""
 **📊 How to interpret this chart:**
-This tree takes the last closing price (**{last_price:,.2f}**) and projects it forward using the Nifty 50's historical annualized volatility (**{annual_volatility*100:.2f}%**). 
-
-At each step, the price can either jump **UP** (Green line) by a mathematical factor, or jump **DOWN** (Red line) by a factor. 
-* The **top-most node** on the far right represents the absolute best-case scenario if the market goes up every single step.
-* The **bottom-most node** represents the absolute worst-case scenario.
-* The nodes in the middle represent the most statistically probable outcomes where the market fluctuates up and down.
-
-*Geeky details: This uses the Cox-Ross-Rubinstein formulas where the up factor is calculated as $u = e^{{\sigma \sqrt{{\Delta t}}}}$ and the down factor is $d = 1/u$.*
+Hover your mouse over any green circle node to instantly see what price level that specific combination of market jumps generates.
+* The **Top Boundary Nodes** demonstrate a market where positive volatility hits repeatedly.
+* The **Bottom Boundary Nodes** demonstrate continuous down-cycles.
+* The dense clustering of nodes in the **Middle** represents the highest statistical area of probability based on the Nifty 50's current historical volatility indicator.
 """)
